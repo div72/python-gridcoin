@@ -20,7 +20,7 @@ JSONValue = (
     str | int | float | dict[str, "JSONValue"] | Sequence["JSONValue"] | bool | None
 )
 
-T = TypeVar("T", bound=Awaitable[JSONValue] | JSONValue)
+T = TypeVar("T", bound=Awaitable[JSONValue] | JSONValue, covariant=True)
 
 
 @runtime_checkable
