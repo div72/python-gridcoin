@@ -1,4 +1,5 @@
 import functools
+import os
 from pathlib import Path
 
 from collections.abc import Awaitable, Callable, Sequence
@@ -8,6 +9,7 @@ from typing import (
     Any,
     Final,
     Generic,
+    Optional,
     Protocol,
     TypedDict,
     TypeVar,
@@ -52,8 +54,31 @@ def _get_json(resp: JSONDeserializable[T] | Awaitable[JSONDeserializable[T]]) ->
 
 class WalletRPC(Generic[T]):
     io_func: Postable[T]
+    url: str
 
-    def __init__(self, io_func: Postable[T], url=None, testnet=False):
+    @staticmethod
+    def url_from_config(config_file: str | os.PathLike[str]) -> str:
+        config_path: Path = Path(config_file)
+
+        data: dict[str, str] = dict(
+            filter(
+                lambda parts: len(parts) == 2,
+                map(
+                    lambda line: line.split("#", 1)[0].rstrip().split("=", 1),
+                    config_path.read_text().splitlines(),
+                ),
+            )
+        )
+
+        testnet: bool = config_path.parent.name == "testnet"
+
+        port: str = data.get("rpcport", "25715" if testnet else "15715")
+
+        return f"http://{data['rpcuser']}:{data['rpcpassword']}@localhost:{port}"
+
+    def __init__(
+        self, io_func: Postable[T], url: Optional[str] = None, testnet: bool = False
+    ):
         self.io_func = io_func
 
         if url is None:
@@ -62,18 +87,9 @@ class WalletRPC(Generic[T]):
             if testnet:
                 data_path = data_path / "testnet"
 
-            config: dict[str, str] = dict(
-                map(
-                    lambda line: line.split("="),
-                    (data_path / "gridcoinresearch.conf").read_text().splitlines(),
-                )
-            )
-
-            port: str = config.get("rpcport", "25715" if testnet else "15715")
-
-            self.url = (
-                f"http://{config['rpcuser']}:{config['rpcpassword']}@localhost:{port}"
-            )
+            self.url = WalletRPC.url_from_config(data_path / "gridcoinresearch.conf")
+        else:
+            self.url = url
 
     @functools.cache
     def __getattribute__(self, name: str):
