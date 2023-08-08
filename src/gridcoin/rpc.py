@@ -7,6 +7,7 @@ from typing import (
     overload,
     runtime_checkable,
     Any,
+    ClassVar,
     Final,
     Generic,
     Optional,
@@ -40,14 +41,220 @@ class Postable(Protocol[T]):
         ...
 
 
-def _get_json(resp: JSONDeserializable[T] | Awaitable[JSONDeserializable[T]]) -> T:
+class JSONResponseError(TypedDict):
+    code: int
+    message: str
+
+
+class JSONResponse(TypedDict):
+    result: JSONValue
+    error: Optional[JSONResponseError]
+
+
+class WalletRPCException(Exception):
+    code: int
+    exc_types: ClassVar[dict[int, type]] = {}
+
+    def __new__(cls, code: int, *args: Any) -> "WalletRPCException":
+        if cls is WalletRPCException:
+            try:
+                return WalletRPCException.exc_types[code](code, *args)
+            except KeyError:
+                pass
+
+        return Exception.__new__(cls, code, *args)  # type: ignore
+
+    def __init__(self, code: int, *args: Any):
+        self.code = code
+        super().__init__(*args)
+
+    def __init_subclass__(cls, code: int, **kwargs: Any):
+        WalletRPCException.exc_types[code] = cls
+        super().__init_subclass__(**kwargs)
+
+
+# Generated for Gridcoin 5.4.5.3
+class InvalidRequestError(WalletRPCException, code=-32600):
+    pass
+
+
+class MethodNotFoundError(WalletRPCException, code=-32601):
+    pass
+
+
+class InvalidParamsError(WalletRPCException, code=-32602):
+    pass
+
+
+class InternalError(WalletRPCException, code=-32603):
+    pass
+
+
+class ParseError(WalletRPCException, code=-32700):
+    pass
+
+
+class MiscError(WalletRPCException, code=-1):
+    pass
+
+
+class RPCTypeError(WalletRPCException, code=-3):
+    pass
+
+
+class InvalidAddressOrKeyError(WalletRPCException, code=-5):
+    pass
+
+
+class OutOfMemoryError(WalletRPCException, code=-7):
+    pass
+
+
+class InvalidParameterError(WalletRPCException, code=-8):
+    pass
+
+
+class DatabaseError(WalletRPCException, code=-20):
+    pass
+
+
+class DeserializationError(WalletRPCException, code=-22):
+    pass
+
+
+class VerifyError(WalletRPCException, code=-25):
+    pass
+
+
+class VerifyRejectedError(WalletRPCException, code=-26):
+    pass
+
+
+class VerifyAlreadyInChainError(WalletRPCException, code=-27):
+    pass
+
+
+class InWarmupError(WalletRPCException, code=-28):
+    pass
+
+
+class MethodDeprecatedError(WalletRPCException, code=-32):
+    pass
+
+
+class ClientNotConnectedError(WalletRPCException, code=-9):
+    pass
+
+
+class ClientInInitialDownloadError(WalletRPCException, code=-10):
+    pass
+
+
+class ClientNodeAlreadyAddedError(WalletRPCException, code=-23):
+    pass
+
+
+class ClientNodeNotAddedError(WalletRPCException, code=-24):
+    pass
+
+
+class ClientNodeNotConnectedError(WalletRPCException, code=-29):
+    pass
+
+
+class ClientInvalidIpOrSubnetError(WalletRPCException, code=-30):
+    pass
+
+
+class ClientP2pDisabledError(WalletRPCException, code=-31):
+    pass
+
+
+class ClientNodeCapacityReachedError(WalletRPCException, code=-34):
+    pass
+
+
+class ClientMempoolDisabledError(WalletRPCException, code=-33):
+    pass
+
+
+class WalletError(WalletRPCException, code=-4):
+    pass
+
+
+class WalletInsufficientFundsError(WalletRPCException, code=-6):
+    pass
+
+
+class WalletInvalidLabelNameError(WalletRPCException, code=-11):
+    pass
+
+
+class WalletKeypoolRanOutError(WalletRPCException, code=-12):
+    pass
+
+
+class WalletUnlockNeededError(WalletRPCException, code=-13):
+    pass
+
+
+class WalletPassphraseIncorrectError(WalletRPCException, code=-14):
+    pass
+
+
+class WalletWrongEncStateError(WalletRPCException, code=-15):
+    pass
+
+
+class WalletEncryptionFailedError(WalletRPCException, code=-16):
+    pass
+
+
+class WalletAlreadyUnlockedError(WalletRPCException, code=-17):
+    pass
+
+
+class WalletNotFoundError(WalletRPCException, code=-18):
+    pass
+
+
+class WalletNotSpecifiedError(WalletRPCException, code=-19):
+    pass
+
+
+class WalletAlreadyLoadedError(WalletRPCException, code=-35):
+    pass
+
+
+class WalletAlreadyExistsError(WalletRPCException, code=-36):
+    pass
+
+
+class ForbiddenBySafeModeError(WalletRPCException, code=-2):
+    pass
+
+
+def _get_result(resp: JSONDeserializable[T] | Awaitable[JSONDeserializable[T]]) -> T:
     if isinstance(resp, JSONDeserializable):
-        return resp.json()
+        ret: JSONResponse = resp.json()  # type: ignore
+
+        if ret["error"] is not None:
+            raise WalletRPCException(ret["error"]["code"], ret["error"]["message"])
+
+        return ret["result"]  # type: ignore
     else:
 
         async def unpacker(o: Awaitable[JSONDeserializable[T]]) -> JSONValue:
             r = await o
-            return await r.json()  # type: ignore
+
+            ret: JSONResponse = await r.json()  # type: ignore
+            # Keeping pyright happy.
+            error: Optional[JSONResponseError] = ret["error"]
+
+            if error is not None:
+                raise WalletRPCException(error["code"], error["message"])
+
+            return ret["result"]
 
         return unpacker(resp)  # type: ignore
 
@@ -96,7 +303,7 @@ class WalletRPC(Generic[T]):
         if name in WalletRPC.COMMANDS:
 
             def _call(*args: JSONValue) -> T:
-                return _get_json(
+                return _get_result(
                     self.io_func(self.url, json={"method": name, "params": args})
                 )
 
